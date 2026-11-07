@@ -2,11 +2,11 @@ name: btc-alerts
 
 on:
   schedule:
-    - cron: "*/5 * * * *"
-  workflow_dispatch: {}
+    - cron: "*/5 * * * *"   # GitHub may delay scheduled runs by a few minutes at busy times
+  workflow_dispatch: {}     # "Run workflow" button for testing
 
 permissions:
-  contents: write
+  contents: write           # only used to commit weekly_log.md once a week
 
 concurrency:
   group: btc-alerts
@@ -17,14 +17,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
       - name: Restore bot state
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v5
         with:
           path: .state
           key: state-${{ github.run_id }}
@@ -38,11 +38,13 @@ jobs:
 
       - name: Save bot state
         if: always()
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v5
         with:
           path: .state
           key: state-${{ github.run_id }}-${{ github.run_attempt }}
 
+      # Weekly close log gets committed once a week. This also keeps the repo
+      # "active", so GitHub doesn't pause the schedule after 60 quiet days.
       - name: Commit weekly log
         run: |
           if [[ -n "$(git status --porcelain weekly_log.md)" ]]; then
