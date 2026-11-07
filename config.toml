@@ -1,0 +1,271 @@
+# BTC alert bot configuration. Edit freely; the next run picks up changes.
+# All event times are UTC ("Z"). UK is on UTC until 29 Mar 2027, so they match UK clock time.
+
+timezone = "Europe/London"   # how times are shown in messages
+
+[alerts]
+level_buffer_pct = 0.15        # price must clear a level by this % to count as a break (stops chop spam)
+level_cooldown_min = 240       # don't re-alert the same level within this window
+move_1h_pct = 3.0              # fast-move alert thresholds
+move_24h_pct = 6.0
+move_cooldown_min = 120
+rsi_low = 30
+rsi_high = 70
+weekly_close_warning_hours = 2 # heads-up before Sunday-night weekly close (00:00 UTC Monday)
+fng_extreme_fear = 20
+fng_extreme_greed = 80
+funding_high_pct = 0.05        # Deribit perp funding per 8h
+funding_low_pct = -0.02
+sentiment_interval_min = 60
+warn_after_failures = 6
+
+[digest]
+enabled = true
+hour = 8                       # morning brief, local time
+
+# ---------------------------------------------------------------- moving levels
+# Recomputed every run from Coinbase daily candles, using the live price for the
+# current candle (same as TradingView's intrabar values).
+[dynamic_levels]
+track = ["sma50w", "ema50w", "sma200w", "sma50d", "ema50d", "sma200d", "avwap_ytd"]
+major = ["sma50w", "sma200w", "sma200d", "avwap_ytd"]
+avwap_anchor = "2026-01-01"
+
+# ---------------------------------------------------------------- static levels
+# importance = "major" -> normal alert; "minor" -> silent notification
+[[levels]]
+price = 87000
+name = "Range high / short-liquidation cluster"
+note = "Sep-Oct highs; largest short cluster per Glassnode. Squeeze target."
+
+[[levels]]
+price = 82300
+name = "Yearly AVWAP +1σ band"
+importance = "minor"
+
+[[levels]]
+price = 81500
+name = "US spot ETF avg cost basis"
+note = "Above = ETF holders back in profit; below = rallies may meet ETF selling."
+
+[[levels]]
+price = 77700
+name = "True Market Mean (your blue line)"
+note = "Reclaim is the first sign bulls have control again."
+
+[[levels]]
+price = 75700
+name = "Short-term holder cost basis"
+note = "Recent buyers' break-even. Losing it risks loss-selling."
+
+[[levels]]
+price = 70000
+name = "$70k / top of volume node"
+importance = "minor"
+
+[[levels]]
+price = 68000
+name = "Volume POC (your red line)"
+note = "Heaviest traded zone of 2026; overlaps 200W SMA."
+
+[[levels]]
+price = 63000
+name = "Top of $60-63k on-chain block"
+importance = "minor"
+
+[[levels]]
+price = 60000
+name = "Feb low / $60k"
+
+[[levels]]
+price = 58000
+name = "2026 low (July)"
+note = "Losing this breaks the whole 2026 range."
+
+# ---------------------------------------------------------------- calendar
+# remind_minutes: lead times for reminders. reaction_minutes: send a "how BTC
+# reacted" message that long after the event (0 = off). importance = "high"
+# lets the final reminder through even when muted.
+
+[[events]]
+name = "Fed's Waller speaks (economic outlook, London)"
+at = 2026-11-10T09:00:00Z
+remind_minutes = [60]
+reaction_minutes = 0
+
+[[events]]
+name = "US CPI (October)"
+at = 2026-11-10T13:30:00Z
+importance = "high"
+note = "Key input for the 9 Dec hike odds (~69% priced). Hot = risk-off."
+remind_minutes = [1440, 60]
+reaction_minutes = 30
+
+[[events]]
+name = "Nvidia Q3 earnings"
+at = 2026-11-17T21:20:00Z
+importance = "high"
+note = "Chip rout drove BTC's drop this month; call at 22:00 UK."
+remind_minutes = [1440, 60]
+reaction_minutes = 60
+
+[[events]]
+name = "FOMC minutes (Oct meeting)"
+at = 2026-11-18T19:00:00Z
+note = "Look for how many members back a December hike."
+remind_minutes = [60]
+reaction_minutes = 30
+
+[[events]]
+name = "US PCE inflation (October)"
+at = 2026-11-25T13:30:00Z
+importance = "high"
+note = "Fed's preferred gauge. Thin liquidity into US Thanksgiving (26 Nov)."
+remind_minutes = [1440, 60]
+reaction_minutes = 30
+
+[[events]]
+name = "Deribit monthly options expiry"
+at = 2026-11-27T08:00:00Z
+note = "Max pain ~$80k. Expect pinning/volatility around 08:00 UK."
+remind_minutes = [1440, 60]
+reaction_minutes = 0
+
+[[events]]
+name = "US JOLTS job openings"
+at = 2026-12-01T15:00:00Z
+remind_minutes = [60]
+reaction_minutes = 0
+
+[[events]]
+name = "US jobs report (November)"
+at = 2026-12-04T13:30:00Z
+importance = "high"
+note = "Last jobs print before the 9 Dec decision. Oct was 165k vs 65k expected."
+remind_minutes = [1440, 60]
+reaction_minutes = 30
+
+[[events]]
+name = "FOMC decision + dot plot"
+at = 2026-12-09T19:00:00Z
+importance = "high"
+note = "Hike vs hold, plus 2027 path. Press conference 19:30 UK."
+remind_minutes = [2880, 1440, 60]
+reaction_minutes = 60
+
+[[events]]
+name = "US CPI (November)"
+at = 2026-12-10T13:30:00Z
+importance = "high"
+note = "Lands the morning after the Fed decision."
+remind_minutes = [1440, 60]
+reaction_minutes = 30
+
+[[events]]
+name = "US PPI (November)"
+at = 2026-12-15T13:30:00Z
+remind_minutes = [60]
+reaction_minutes = 0
+
+[[events]]
+name = "US PCE (November) + GDP Q3 final"
+at = 2026-12-23T13:30:00Z
+remind_minutes = [1440, 60]
+reaction_minutes = 30
+
+[[events]]
+name = "Deribit quarterly options expiry"
+at = 2026-12-25T08:00:00Z
+note = "Big quarterly expiry; falls on Christmas Day, so confirm the date on Deribit."
+remind_minutes = [2880, 1440]
+reaction_minutes = 0
+
+[[events]]
+name = "CLARITY Act lapses if Senate doesn't act"
+at = 2027-01-03T00:00:00Z
+note = "US crypto market-structure bill. Watch for a last-minute vote."
+remind_minutes = [10080, 1440]
+reaction_minutes = 0
+
+# ---------------------------------------------------------------- news
+[news]
+enabled = true
+interval_min = 10
+max_age_hours = 8
+max_per_run = 4
+min_score = 4.5      # an item needs this much keyword weight to be sent
+high_score = 7       # at or above this it notifies loudly and gets a 🔥
+# crypto feeds must mention one of these
+relevance = ['\bbitcoin\b', '\bbtc\b', '\bcrypto', 'digital asset', '\bstablecoin', '\betf\b']
+
+[news.keywords]   # regex = weight (title hit full weight, summary-only hit half)
+'\bhack(ed|s|er|ers)?\b' = 6
+'\bexploit' = 6
+'\bdrain(ed)?\b' = 5
+'\bstolen\b' = 5
+'\binsolven' = 6
+'\bbankrupt' = 6
+'halt(s|ed)? withdrawals' = 6
+'\bintermeeting\b' = 6
+'\bemergency\b' = 4
+'\bdepeg' = 6
+'\bseiz(e|ed|ure)' = 4
+'\bban(s|ned)?\b' = 4
+'strategic bitcoin reserve' = 5
+'rate (hike|cut|increase|rise)' = 5
+'\b(raises?|hikes?|cuts?|lowers?|holds?|keeps?) (interest )?rates?\b' = 5
+'\bfomc\b' = 4
+'\bwarsh\b' = 3
+'\bcpi\b|\binflation\b' = 3
+'\bpayrolls?\b|jobs report' = 3
+'etf (in|out)flows?|(in|out)flows? from .*etf' = 4.5
+'\bibit\b|\bblackrock\b' = 2
+'\bsaylor\b|\bstrategy (buys|bought|sells|sold|adds|acquires)' = 4
+'clarity act|market structure bill' = 5
+'\bsec\b' = 3
+'stablecoin (bill|law|act)' = 3
+'\btreasury\b' = 2
+'\btariffs?\b' = 3
+'\bliquidat' = 3
+'\bcapitulat' = 3
+'\bcrash' = 3
+'\bplunge|\btumble|\bsurge|\bsoar' = 2
+'all-time high|record high' = 4
+'\bnasdaq\b|\bnvidia\b' = 2
+'\bwhales?\b' = 2
+'mt\.? ?gox' = 4
+'\btether\b|\busdt\b' = 3
+'\bbinance\b' = 3
+'north korea|lazarus' = 3
+
+[[news.feeds]]
+name = "CoinDesk"
+url = "https://www.coindesk.com/arc/outboundfeeds/rss/"
+
+[[news.feeds]]
+name = "Cointelegraph"
+url = "https://cointelegraph.com/rss"
+
+[[news.feeds]]
+name = "The Block"
+url = "https://www.theblock.co/rss.xml"
+
+[[news.feeds]]
+name = "Decrypt"
+url = "https://decrypt.co/feed"
+
+[[news.feeds]]
+name = "Bitcoin Magazine"
+url = "https://bitcoinmagazine.com/.rss/full/"
+
+[[news.feeds]]
+name = "Federal Reserve"
+url = "https://www.federalreserve.gov/feeds/press_monetary.xml"
+require_relevance = false
+bonus = 5            # any Fed monetary-policy release is worth seeing
+
+[[news.feeds]]
+name = "CNBC Economy"
+url = "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=20910258"
+require_relevance = false
+title_filter = 'fed|rate|inflation|cpi|jobs|payroll|warsh|treasury|yields?'
