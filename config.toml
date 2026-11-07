@@ -14,8 +14,8 @@ rsi_high = 70
 weekly_close_warning_hours = 2 # heads-up before Sunday-night weekly close (00:00 UTC Monday)
 fng_extreme_fear = 20
 fng_extreme_greed = 80
-funding_high_pct = 0.05        # Deribit perp funding per 8h
-funding_low_pct = -0.02
+funding_high_bps = 5           # Deribit perp funding per 8h, in basis points (5bp = 0.05%)
+funding_low_bps = -2
 sentiment_interval_min = 60
 warn_after_failures = 6
 

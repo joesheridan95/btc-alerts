@@ -224,6 +224,33 @@ def ema(v, n):
     return e
 
 
+def ema_series(v, n):
+    if len(v) < n:
+        return []
+    k = 2 / (n + 1)
+    e = sum(v[:n]) / n
+    out = [e]
+    for x in v[n:]:
+        e = x * k + e * (1 - k)
+        out.append(e)
+    return out  # out[i] aligns with v[n - 1 + i]
+
+
+def macd_hist(v, fast=12, slow=26, sig=9):
+    if len(v) < slow + sig:
+        return None
+    ef, es = ema_series(v, fast), ema_series(v, slow)
+    ef = ef[slow - fast:]  # align both to v[slow-1:]
+    line = [a - b for a, b in zip(ef, es)]
+    s = ema_series(line, sig)
+    return line[-1] - s[-1] if s else None
+
+
+def fmt_funding(f8_pct):
+    """Funding per 8h given in percent -> basis points + annualised."""
+    return f"{f8_pct * 100:+.2f}bp/8h (≈{f8_pct * 3 * 365:+.1f}% APR)"
+
+
 def rsi(v, n=14):
     if len(v) < n + 1:
         return None
@@ -259,6 +286,9 @@ def indicators(rows, live=None, avwap_anchor=None):
         "rsi14d": rsi(d, 14),
         "sma50w": sma(w, 50), "ema50w": ema(w, 50), "sma200w": sma(w, 200),
         "avwap_ytd": None,
+        "macd_hist": macd_hist(d),
+        "sma50w_slope": (sma(w, 50) - sma(w[:-4], 50)) if len(w) >= 54 else None,
+        "ema50d_slope": (ema(d, 50) - ema(d[:-5], 50)) if len(d) >= 55 else None,
     }
     if rows:
         anchor = avwap_anchor or f"{rows[-1][0][:4]}-01-01"
@@ -321,6 +351,27 @@ def score_news(title, summary, keywords):
             score += w / 2
             hits.append(pat)
     return score, hits
+
+
+DEFAULT_BULLISH = [
+    r"\binflows?\b", r"\b(buys|bought|adds|acquires|accumulat)", r"\bapprov", r"rate cuts?\b", r"\bcuts? rates?",
+    r"\badopt", r"strategic (bitcoin )?reserve", r"\b(surge|soar|rall(y|ies)|jump|rebound|recover)",
+    r"all-time high|record high", r"short squeeze|shorts? liquidat", r"\bpasses\b|\bsigned into law",
+    r"\bdovish\b", r"\beases?\b|\bcooler\b|\bsoft(er)?\b",
+]
+DEFAULT_BEARISH = [
+    r"\bhack|\bexploit|\bdrain|\bstolen", r"\boutflows?\b", r"rate (hike|increase|rise)|\bhikes?\b|raises? rates?",
+    r"\bban(s|ned)?\b", r"\bsues?\b|lawsuit|\bcharge[sd]\b|\bindict", r"\b(crash|plunge|tumble|slump|sink|sell-?off|drop)",
+    r"\binsolven|\bbankrupt|halts? withdrawals", r"long liquidat|\bliquidations?\b", r"\bhawkish\b",
+    r"\bhot(ter)?\b|\bsticky\b", r"\bfails?\b|\bdelay|\bstall", r"\bdepeg", r"\bsell(s|ing)?\b|\bdump",
+]
+
+
+def news_tone(text, bullish=None, bearish=None):
+    t = text.lower()
+    b = sum(1 for p in (bullish or DEFAULT_BULLISH) if re.search(p, t, re.I))
+    s = sum(1 for p in (bearish or DEFAULT_BEARISH) if re.search(p, t, re.I))
+    return "bull" if b > s else "bear" if s > b else "neutral"
 
 
 def title_words(t):
@@ -416,6 +467,72 @@ class Bot:
                     best = (t, p)
         return best[1] if best else None
 
+    # -- bullish / bearish read
+    def bias(self):
+        """Backdrop from live indicators.
+        Trend (weekly): price vs 50W SMA, 50W EMA, 200W SMA + 50W SMA slope      -> -4..+4
+        Momentum (daily): price vs 50D EMA/SMA, 200D SMA, yearly AVWAP, RSI, MACD
+                          histogram, 50D EMA slope                                -> -7..+7"""
+        ind, p = self.live, self.price
+        if not ind or not p:
+            return None
+        sgn = lambda x: (x > 0) - (x < 0)
+        t, m = [], []
+        for k in ("sma50w", "ema50w", "sma200w"):
+            if ind.get(k):
+                t.append(1 if p >= ind[k] else -1)
+        if ind.get("sma50w_slope") is not None:
+            t.append(sgn(ind["sma50w_slope"]))
+        for k in ("ema50d", "sma50d", "sma200d", "avwap_ytd"):
+            if ind.get(k):
+                m.append(1 if p >= ind[k] else -1)
+        r = ind.get("rsi14d")
+        if r is not None:
+            m.append(1 if r > 55 else -1 if r < 45 else 0)
+        for k in ("macd_hist", "ema50d_slope"):
+            if ind.get(k) is not None:
+                m.append(sgn(ind[k]))
+        ts, ms = sum(t), sum(m)
+        tl = "bull" if ts >= 2 else "bear" if ts <= -2 else "neutral"
+        ml = "bull" if ms >= 3 else "bear" if ms <= -3 else "neutral"
+        if tl == ml:
+            ov = tl
+        elif "neutral" in (tl, ml):
+            ov = (tl if ml == "neutral" else ml) + "_lean"
+        else:
+            ov = "mixed"
+        return {"trend": tl, "mom": ml, "overall": ov, "ts": ts, "ms": ms, "tn": len(t), "mn": len(m)}
+
+    ICON = {"bull": "🟢", "bear": "🔴", "neutral": "⚪"}
+    OVERALL = {"bull": "🟢 Bullish", "bear": "🔴 Bearish", "bull_lean": "🟢 Bullish lean",
+               "bear_lean": "🔴 Bearish lean", "neutral": "⚪ Neutral", "mixed": "🟡 Mixed"}
+
+    def read_line(self, signal=None, why=""):
+        """One line: this alert's direction + the overall backdrop, and whether they agree."""
+        b = self.bias()
+        if not b:
+            return ""
+        back = f"backdrop {self.OVERALL[b['overall']]} (trend {self.ICON[b['trend']]} · momentum {self.ICON[b['mom']]})"
+        if signal is None:
+            return f"<i>Read: {back}</i>"
+        sig = {"bull": "🟢 <b>Bullish</b>", "bear": "🔴 <b>Bearish</b>", "neutral": "⚪ <b>Neutral</b>"}[signal]
+        if why:
+            sig += f" ({esc(why)})"
+        ctx = "bull" if b["overall"].startswith("bull") else "bear" if b["overall"].startswith("bear") else None
+        tail = ""
+        if signal != "neutral" and ctx:
+            tail = " → with the trend" if signal == ctx else " → against the backdrop"
+        return f"{sig} · {back}{tail}"
+
+    def bias_summary(self):
+        b = self.bias()
+        if not b:
+            return ""
+        name = {"bull": "bullish", "bear": "bearish", "neutral": "neutral"}
+        return (f"<b>Bias: {self.OVERALL[b['overall']]}</b>\n"
+                f"Trend (weekly) {self.ICON[b['trend']]} {name[b['trend']]} {b['ts']:+d}/{b['tn']} · "
+                f"Momentum (daily) {self.ICON[b['mom']]} {name[b['mom']]} {b['ms']:+d}/{b['mn']}")
+
     # -- levels
     def levels(self, ind=None):
         """All tracked levels as dicts: id, price, name, note, major."""
@@ -467,6 +584,10 @@ class Bot:
             nxt = self.next_levels(p, exclude={lv["id"] for lv, _ in hits})
             if nxt:
                 msg += "\n" + nxt
+            key_hits = [h for h in hits if h[0]["major"]] or hits
+            dirs = {u for _, u in key_hits}
+            signal = "neutral" if len(dirs) > 1 else ("bull" if up else "bear")
+            msg += "\n" + self.read_line(signal, "level reclaimed" if signal == "bull" else "level lost" if signal == "bear" else "")
             if major:
                 msg += "\n<i>Intraday break: the close is what counts.</i>"
             self.emit(msg, "normal" if major else "low")
@@ -503,7 +624,9 @@ class Bot:
                 self.st["move_last_alert"][name] = self.ts
                 icon = "🚀" if chg > 0 else "⚠️"
                 self.emit(f"{icon} <b>BTC {pct(chg)} in {name}</b>: {usd(ref)} → {usd(self.price)}\n"
-                          + self.next_levels(self.price), "high" if abs(chg) >= thr * 1.6 else "normal")
+                          + self.next_levels(self.price) + "\n"
+                          + self.read_line("bull" if chg > 0 else "bear", "fast move"),
+                          "high" if abs(chg) >= thr * 1.6 else "normal")
 
     # -- daily / weekly close
     def close_reports(self):
@@ -521,6 +644,7 @@ class Bot:
         now_i, prev_i = indicators(rows, avwap_anchor=anchor), indicators(rows[:-1], avwap_anchor=anchor)
         c, pc = rows[-1][1], rows[-2][1]
         crossed = []
+        score = 0
         for lv in self.levels(ind=now_i):
             L = lv["price"]
             if lv.get("dynamic"):
@@ -532,6 +656,7 @@ class Bot:
                 Lp = L
             if (pc >= Lp) != (c >= L):
                 crossed.append(("🟢 closed ABOVE" if c >= L else "🔴 closed BELOW") + f" {esc(lv['name'])} ({usd(L)})")
+                score += (1 if c >= L else -1) * (2 if lv["major"] else 1)
         notable = bool(crossed)
         d = date.fromisoformat(last)
         lines = [f"📅 <b>Daily close {d.strftime('%a %d %b')}: {usd(c)}</b> ({pct((c / pc - 1) * 100)})"]
@@ -552,6 +677,7 @@ class Bot:
         if None not in (a, b, ap, bp) and (a > b) != (ap > bp):
             lines.append("✨ <b>Golden cross</b> (50D SMA over 200D SMA)" if a > b else "💀 <b>Death cross</b> (50D SMA under 200D SMA)")
             notable = True
+            score += 3 if a > b else -3
         pos = []
         for key in ("sma50d", "sma200d", "sma50w"):
             v = now_i.get(key)
@@ -559,6 +685,10 @@ class Bot:
                 pos.append(f"{DYNAMIC_LABELS[key]} {usd(v)} {'▲' if c >= v else '▼'}")
         if pos:
             lines.append(" · ".join(pos))
+        if score:
+            lines.append(self.read_line("bull" if score > 0 else "bear", "close-based"))
+        else:
+            lines.append(self.read_line())
         self.emit("\n".join(lines), "normal" if notable else "low")
         if d.weekday() == 6:
             self.weekly_report(rows, now_i)
@@ -578,18 +708,22 @@ class Bot:
         lines = [f"🗓 <b>WEEKLY CLOSE: {usd(c)}</b> ({pct(chg)}) · {streak} {'green' if sign else 'red'} week{'s' if streak > 1 else ''} in a row"]
         prev_ind = indicators([r for r in rows if r[0] <= wk[-2][0]])
         log_bits = []
+        wscore = (1 if chg > 0 else -1) * (3 if abs(chg) >= 8 else 2 if abs(chg) >= 4 else 1)
         for key in ("sma50w", "ema50w", "sma200w"):
             v, vp = ind.get(key), prev_ind.get(key)
             if not v:
                 continue
             side = "ABOVE" if c >= v else "BELOW"
             flip = vp is not None and ((pc >= vp) != (c >= v))
+            wscore += (1 if c >= v else -1) * (3 if flip else 1)
             lines.append(f"{'🔁 ' if flip else ''}{side} {DYNAMIC_LABELS[key]} {usd(v)} ({pct((c / v - 1) * 100)})"
                          + (" ← flipped this week" if flip else ""))
             log_bits.append(f"{DYNAMIC_LABELS[key]} {usd(v)} {side.lower()}")
         nxt = self.next_levels(c)
         if nxt:
             lines.append(nxt)
+        wsig = "bull" if wscore >= 2 else "bear" if wscore <= -2 else "neutral"
+        lines.append(self.read_line(wsig, "weekly close"))
         self.emit("\n".join(lines), "high")
         if self.weekly_log:
             new = not os.path.exists(self.weekly_log)
@@ -614,6 +748,7 @@ class Bot:
                 if v:
                     lines.append(f"{'▲' if self.price >= v else '▼'} {DYNAMIC_LABELS[k]} {usd(v)} ({pct((self.price / v - 1) * 100)})")
             lines.append(self.next_levels(self.price))
+            lines.append(self.read_line())
             self.emit("\n".join(lines), "normal")
 
     # -- sentiment
@@ -627,21 +762,27 @@ class Bot:
             s["fng"], s["fng_cls"] = v, cls
             zone = "extreme_fear" if v <= self.a.get("fng_extreme_fear", 20) else "extreme_greed" if v >= self.a.get("fng_extreme_greed", 80) else "neutral"
             if zone != self.st["fng_zone"] and self.st["fng_zone"] is not None and zone != "neutral":
-                self.emit(f"{'😱' if zone == 'extreme_fear' else '🤑'} <b>Fear & Greed hit {v} ({esc(cls)})</b>. "
-                          + ("Historically a contrarian buy zone, but not a timing signal on its own." if zone == "extreme_fear"
-                             else "Crowded optimism; watch for long squeezes."), "normal")
+                fear = zone == "extreme_fear"
+                self.emit(f"{'😱' if fear else '🤑'} <b>Fear & Greed hit {v} ({esc(cls)})</b>. "
+                          + ("Historically a contrarian buy zone, but not a timing signal on its own." if fear
+                             else "Crowded optimism; watch for long squeezes.")
+                          + "\n" + self.read_line("bull" if fear else "bear", "contrarian"), "normal")
             self.st["fng_zone"] = zone
         except Exception as e:
             log("fear&greed failed", e)
         try:
             f8, oi = perp_funding()
             s["funding_8h"], s["oi"] = f8, oi
-            hi, lo = self.a.get("funding_high_pct", 0.05), self.a.get("funding_low_pct", -0.02)
-            zone = "high" if f8 >= hi else "negative" if f8 <= lo else "normal"
+            bps = f8 * 100
+            hi = self.a.get("funding_high_bps", self.a.get("funding_high_pct", 0.05) * 100)
+            lo = self.a.get("funding_low_bps", self.a.get("funding_low_pct", -0.02) * 100)
+            zone = "high" if bps >= hi else "negative" if bps <= lo else "normal"
             if zone != self.st["funding_zone"] and self.st["funding_zone"] is not None and zone != "normal":
-                self.emit(f"💸 <b>Perp funding {f8:+.3f}%/8h</b> ("
-                          + ("longs paying up: crowded long, squeeze risk down" if zone == "high"
-                             else "shorts paying: crowded short, squeeze risk up") + ")", "normal")
+                high = zone == "high"
+                self.emit(f"💸 <b>Perp funding {fmt_funding(f8)}</b>\n"
+                          + ("Longs paying up: crowded long, squeeze risk down." if high
+                             else "Shorts paying: crowded short, squeeze fuel up.")
+                          + "\n" + self.read_line("bear" if high else "bull", "positioning"), "normal")
             self.st["funding_zone"] = zone
         except Exception as e:
             log("funding failed", e)
@@ -665,7 +806,7 @@ class Bot:
                         if ev.get("note"):
                             msg += f"\n<i>{esc(ev['note'])}</i>"
                         if self.price:
-                            msg += f"\nBTC now {usd(self.price)}"
+                            msg += f"\nBTC now {usd(self.price)}\n" + self.read_line()
                         self.emit(msg, "high" if ev.get("importance") == "high" and l <= 60 else "normal")
             react = ev.get("reaction_minutes", 30)
             if react and "reaction" not in sent and at + timedelta(minutes=react) <= now < at + timedelta(hours=3):
@@ -673,8 +814,10 @@ class Bot:
                 pre = self.price_at(at.timestamp(), tolerance=1500)
                 if pre and self.price:
                     chg = (self.price / pre - 1) * 100
+                    sig = "neutral" if abs(chg) < 0.5 else "bull" if chg > 0 else "bear"
                     self.emit(f"📊 <b>{esc(ev['name'])}: market reaction</b>\nBTC {usd(pre)} → {usd(self.price)} ({pct(chg)}) "
-                              f"in the {react} min after\n" + self.next_levels(self.price), "normal")
+                              f"in the {react} min after\n" + self.next_levels(self.price) + "\n"
+                              + self.read_line(sig, "muted reaction" if sig == "neutral" else "event reaction"), "normal")
         # prune old
         for k in list(self.st["events_sent"]):
             try:
@@ -747,12 +890,15 @@ class Bot:
             recent.append([self.ts, sorted(title_words(it["title"]))])
         self.st["news_recent"] = [r for r in recent if r[0] > self.ts - 48 * 3600][-60:]
         hi = ncfg.get("high_score", 6)
+        tone_cfg = ncfg.get("tone", {})
         lines = ["📰 <b>BTC-relevant news</b>"]
         for it in picked:
             flag = "🔥" if it["score"] >= hi else "•"
-            lines.append(f"{flag} <a href=\"{esc(it['link'])}\">{esc(it['title'])}</a> <i>({esc(it['source'])})</i>")
+            tone = news_tone(it["title"], tone_cfg.get("bullish"), tone_cfg.get("bearish"))
+            lines.append(f"{flag}{self.ICON[tone]} <a href=\"{esc(it['link'])}\">{esc(it['title'])}</a> <i>({esc(it['source'])})</i>")
         if self.price:
             lines.append(f"BTC {usd(self.price)}")
+            lines.append(self.read_line())
         self.emit("\n".join(lines), "normal" if max(i["score"] for i in picked) >= hi else "low")
 
     # -- status / digest
@@ -769,11 +915,14 @@ class Bot:
         if "fng" in s:
             extra.append(f"F&G {s['fng']} {esc(s.get('fng_cls', ''))}")
         if "funding_8h" in s:
-            extra.append(f"funding {s['funding_8h']:+.3f}%/8h")
+            extra.append(f"funding {fmt_funding(s['funding_8h'])}")
         if self.live.get("rsi14d"):
             extra.append(f"daily RSI {self.live['rsi14d']:.0f}")
         if extra:
             lines.append(" · ".join(extra))
+        bs = self.bias_summary()
+        if bs:
+            lines += ["", bs]
         lines.append("")
         lines.append("<b>Moving averages</b>")
         for key in ("sma50d", "ema50d", "sma200d", "sma50w", "ema50w", "sma200w", "avwap_ytd"):
